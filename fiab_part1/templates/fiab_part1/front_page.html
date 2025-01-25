@@ -1,0 +1,460 @@
+<!-- templates/reliability_calculator/index.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Reliability Calculator</title>
+    <style>
+
+        body {
+            font-family: monospace;
+        }
+
+        .container {
+            max-width: 800px; 
+            margin: 0 auto; 
+            padding: 20px;
+        }
+        .form-section {
+            margin-bottom: 20px; 
+            padding: 15px; 
+            border: 1px solid #ddd;
+        }
+        .input-group {
+            margin-bottom: 10px;
+        }
+        .results pre {
+            white-space: pre-wrap;
+            word-break: keep-all;
+            background: white;
+            padding: 15px;
+            border-radius: 5px;
+            border: 1px solid #ddd;
+            font-family: monospace;
+        }
+        .results h3 {
+            color: #2c3e50;
+            border-bottom: 2px solid #3498db;
+            padding-bottom: 10px;
+        }
+    
+        .error {
+            color: #e74c3c;
+            font-weight: bold;
+            margin-top: 10px;
+        }
+    
+        .term-input {
+            margin-bottom: 8px;
+        }
+    
+        .component-input {
+            width: 200px;
+            padding: 5px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 1em;
+        }
+        table, th, td {
+            border: 1px solid #ddd;
+            padding: 8px;
+        }
+        th {
+            background-color: #f3f3f3;
+            text-align: left;
+        }
+
+        /* If you want the toggled sections stacked, no flex needed. */
+        /* If you'd like them side by side, uncomment the flex container below:
+        
+        #sectionsContainer {
+            display: flex;
+            gap: 1em;
+            margin-top: 1em;
+        }
+        #birnbaumSection, #scenarioSection {
+            flex: 1;
+        }
+        
+        */
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Reliability Calculator</h1>
+        
+        <form id="reliabilityForm" class="form-section">
+            <div class="input-group">
+                <label>System Type:</label>
+                <label><input type="radio" name="system_type" value="paths" checked> Minimal Paths</label>
+                <label><input type="radio" name="system_type" value="cuts"> Minimal Cuts</label>
+            </div>
+
+            <div class="input-group">
+                <label>Number of Components:</label>
+                <input type="number" id="num_components" name="num_components" min="1" max="20" value="6" required>
+            </div>
+
+            <div class="input-group">
+                <label>Paths/Cuts:</label>
+                <div id="termsContainer"></div>
+                <button type="button" id="addTerm">Add Path/Cut</button>
+            </div>
+
+            <div class="input-group">
+                <label>p value:</label>
+                <input type="number" step="0.01" name="p_value" value="0.9" required>
+            </div>
+
+            <div class="input-group">
+                <label>Lambda (λ):</label>
+                <input type="number" step="0.0001" name="lambda_value" value="0.0001" required>
+            </div>
+
+            <button type="submit">Compute</button>
+        </form>
+
+        <!-- The results container -->
+        <div id="results" class="results" style="display: none;">
+            <h3>Results</h3>
+            <pre id="resultContent"></pre>
+            <div id="errorMessage" class="error"></div>
+        </div>
+
+        <!-- Toggle buttons -->
+        <div style="margin-top: 1em;">
+            <button type="button" onclick="toggleSection('birnbaumSection')">Toggle Birnbaum & Structural</button>
+            <button type="button" onclick="toggleSection('scenarioSection')">Toggle Scenario & Critical States</button>
+        </div>
+
+        <!-- Toggled sections (stacked by default) -->
+        <div id="sectionsContainer" style="margin-top: 1em;">
+            <div id="birnbaumSection" style="display: none;"></div>
+            <div id="scenarioSection" style="display: none;"></div>
+        </div>
+    </div>
+
+    <script>
+    /*********************************************************************
+     * 1) Toggle a section by ID (used by the "Toggle" buttons above)
+     *********************************************************************/
+    function toggleSection(sectionId) {
+        const el = document.getElementById(sectionId);
+        if (el.style.display === 'none') {
+            el.style.display = 'block';
+        } else {
+            el.style.display = 'none';
+        }
+    }
+
+    /*********************************************************************
+     * 2) In-page logic (building the dynamic inputs, form submission, etc.)
+     *********************************************************************/
+    document.addEventListener('DOMContentLoaded', () => {
+        const termsContainer = document.getElementById('termsContainer');
+        const addTermButton = document.getElementById('addTerm');
+
+        // 2.1) Create one line of "component input" by default
+        function createTermInput() {
+            const newTerm = document.createElement('div');
+            newTerm.className = 'term-input';
+            newTerm.innerHTML = `
+                <input type="text" class="component-input" placeholder="Enter components (e.g., 1 2 3)">
+                <button type="button" class="remove-term">×</button>
+            `;
+
+            // Press Enter => create new input line
+            const input = newTerm.querySelector('.component-input');
+            input.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    const currentValue = input.value.trim();
+                    if (currentValue !== '') {
+                        const newInput = createTermInput();
+                        termsContainer.insertBefore(newInput, newTerm.nextSibling);
+                        newInput.querySelector('.component-input').focus();
+                    }
+                }
+            });
+
+            // Remove button
+            newTerm.querySelector('.remove-term').addEventListener('click', () => {
+                newTerm.remove();
+            });
+
+            return newTerm;
+        }
+
+        // Initialize with one path/cut line
+        termsContainer.appendChild(createTermInput());
+
+        // Add path/cut line on button click
+        addTermButton.addEventListener('click', () => {
+            const newTerm = createTermInput();
+            termsContainer.appendChild(newTerm);
+            newTerm.querySelector('.component-input').focus();
+        });
+
+
+        // 2.2) Form submission => POST to /compute_reliability/
+        document.getElementById('reliabilityForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+
+            // Build request payload
+            const formData = {
+                system_type: document.querySelector('[name="system_type"]:checked').value,
+                num_components: parseInt(document.getElementById('num_components').value),
+                p_value: parseFloat(document.querySelector('[name="p_value"]').value),
+                lambda_value: parseFloat(document.querySelector('[name="lambda_value"]').value),
+                structures: []
+            };
+
+            // Validate each line of "Paths/Cuts"
+            let valid = true;
+            document.getElementById('errorMessage').textContent = '';
+
+            document.querySelectorAll('.component-input').forEach(input => {
+                input.classList.remove('error');
+                const rawValue = input.value.trim();
+                
+                if (!rawValue) {
+                    valid = false;
+                    input.classList.add('error');
+                    document.getElementById('errorMessage').textContent = 'Empty path/cut detected';
+                    return;
+                }
+                
+                const components = rawValue.split(/\s+/).map(c => {
+                    const num = parseInt(c);
+                    return isNaN(num) ? null : num;
+                });
+                
+                if (components.some(c => c === null || c < 1)) {
+                    valid = false;
+                    input.classList.add('error');
+                    document.getElementById('errorMessage').textContent =
+                        'Invalid component numbers - use positive integers separated by spaces';
+                } else {
+                    formData.structures.push(components);
+                }
+            });
+
+            if (!valid) return;
+
+            try {
+                // POST to Django
+                const response = await fetch('/compute_reliability/', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': '{{ csrf_token }}'
+                    },
+                    body: JSON.stringify(formData)
+                });
+
+                const data = await response.json();
+                if (data.status === 'success') {
+                    showResults(data.results);
+                } else {
+                    showError(data.message || 'An error occurred');
+                }
+            } catch (error) {
+                showError('Network error - please try again');
+            }
+        });
+
+        /*********************************************************************
+         * 2.3) showResults: display the basic reliability table 
+         * plus empty placeholders for Birnbaum & Scenario/Critical
+         *********************************************************************/
+        function showResults(results) {
+            // 1) Show the main "Results" block
+            const resultsDiv = document.getElementById('results');
+            resultsDiv.style.display = 'block';
+            document.getElementById('errorMessage').textContent = '';
+
+            // Build the preliminary reliability table
+            let html = `
+                <h3>Preliminary Reliability Analysis</h3>
+                <table>
+                    <tr>
+                        <th>Success Poly:</th>
+                        <td>${results.single_p_poly}</td>
+                    </tr>
+                    <tr>
+                        <th>Reliability at p:</th>
+                        <td>${results.reliability_value.toFixed(4)}</td>
+                    </tr>
+                    <tr>
+                        <th>Success States:</th>
+                        <td>${results.success_states}</td>
+                    </tr>
+                    <tr>
+                        <th>Fail States:</th>
+                        <td>${results.fail_states}</td>
+                    </tr>
+                    <tr>
+                        <th>ν<sub>s</sub>(p) = p * dR/dp:</th>
+                        <td>${results.nus_expr}</td>
+                    </tr>
+                    <tr>
+                        <th>ν<sub>s</sub> Value:</th>
+                        <td>${results.nus_value.toExponential(2)}</td>
+                    </tr>
+                    <tr>
+                        <th>MUT:</th>
+                        <td>${results.mut.toFixed(2)}</td>
+                    </tr>
+                    <tr>
+                        <th>MDT:</th>
+                        <td>${results.mdt.toFixed(2)}</td>
+                    </tr>
+                </table>
+            `;
+            document.getElementById('resultContent').innerHTML = html;
+
+            // 2) Build the Birnbaum + Structural content 
+            //    (assuming you have "birnbaum_derivatives" and "structural_birnbaum")
+            const birnbaumHtml = buildBirnbaumTable(results);
+            document.getElementById('birnbaumSection').innerHTML = birnbaumHtml;
+
+            // 3) Build the Scenario + Critical content
+            //    (assuming you have "scenario_usage_all" and "critical_data" in results)
+            const scenarioHtml = buildScenarioAndCriticalTable(results);
+            document.getElementById('scenarioSection').innerHTML = scenarioHtml;
+        }
+
+        // 2.4) showError helper
+        function showError(msg) {
+            const errorMessage = document.getElementById('errorMessage');
+            errorMessage.textContent = msg;
+        }
+
+        /*********************************************************************
+         * 2.5) buildBirnbaumTable: returns a single table combining 
+         * Birnbaum derivatives & structural in one row
+         *********************************************************************/
+        function buildBirnbaumTable(results) {
+            const birnRows = results.birnbaum_derivatives || [];
+            const structVals = results.structural_birnbaum || [];
+
+            let html = `
+                <h3>Birnbaum & Structural</h3>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Comp</th>
+                            <th>I_B Value</th>
+                            <th>PCR</th>
+                            <th>Lb</th>
+                            <th>BP</th>
+                            <th>I_B Struct</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+            `;
+            birnRows.forEach((row, idx) => {
+                html += `
+                    <tr>
+                        <td>${row.component}</td>
+                        <td>${row.I_B_value.toFixed(4)}</td>
+                        <td>${row.PCR.toFixed(4)}</td>
+                        <td>${row.Lb.toFixed(4)}</td>
+                        <td>${row.BP.toFixed(4)}</td>
+                        <td>${structVals[idx].toFixed(4)}</td>
+                    </tr>
+                `;
+            });
+            html += `
+                    </tbody>
+                </table>
+            `;
+            return html;
+        }
+
+        /*********************************************************************
+         * 2.6) buildScenarioAndCriticalTable: returns a single table 
+         * with scenario usage + critical states for each component
+         *********************************************************************/
+        function buildScenarioAndCriticalTable(results) {
+            // E.g. you might get something like:
+            // results.scenario_usage_all = [ 
+            //   {comp_index:1, scenario_probabilities:{...}, scenario_counts:{...}},
+            //   ...
+            // ]
+            // results.critical_data = { system_critical_states:X, per_comp:[{comp_index:1, comp_critical_states:Y},...] }
+            const scenarioArr = results.scenario_usage_all || [];
+            const critData = results.critical_data || {
+                system_critical_states:0,
+                per_comp:[]
+            };
+
+            // Build a map from comp_index -> comp_critical_states
+            const compCritMap = {};
+            critData.per_comp.forEach(obj => {
+                compCritMap[obj.comp_index] = obj.comp_critical_states;
+            });
+
+            let html = `
+            <h3>Scenario Usage & Critical States</h3>
+            <p>
+                System-Wide Critical States: <strong>${critData.system_critical_states}</strong>
+            </p>
+            <table>
+                <thead>
+                <tr>
+                    <th>Comp</th>
+                    <th>Up/Up Prob</th>
+                    <th>Up/Up Count</th>
+                    <th>Up/Down Prob</th>
+                    <th>Up/Down Count</th>
+                    <th>*Down/Up Prob*</th>
+                    <th>*Down/Up Count*</th>
+                    <th>*Down/Down Prob*</th>
+                    <th>*Down/Down Count*</th>
+                    <th>Critical States</th>
+                </tr>
+                </thead>
+                <tbody>
+            `;
+
+            scenarioArr.forEach(entry => {
+            const sp = entry.scenario_probabilities || {};
+            const sc = entry.scenario_counts || {};
+            const compIndex = entry.comp_index;
+            const critCount = compCritMap[compIndex] || 0;
+
+            html += `
+                <tr>
+                <td>${compIndex}</td>
+                <td>${(sp.system_up_comp_up||0).toFixed(6)}</td>
+                <td>${sc.system_up_comp_up||0}</td>
+
+                <td>${(sp.system_up_comp_down||0).toFixed(6)}</td>
+                <td>${sc.system_up_comp_down||0}</td>
+
+                <td>${(sp.system_down_comp_up||0).toFixed(6)}</td>
+                <td>${sc.system_down_comp_up||0}</td>
+
+                <td>${(sp.system_down_comp_down||0).toFixed(6)}</td>
+                <td>${sc.system_down_comp_down||0}</td>
+
+                <td>${critCount}</td>
+                </tr>
+            `;
+            });
+
+            html += `
+                    </tbody>
+                </table>
+            `;
+            return html;
+        }
+    });
+    </script>
+
+</body>
+</html>
