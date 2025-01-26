@@ -25,7 +25,7 @@ SECRET_KEY = os.environ.get('SECRET_KEY', 'fallback-secret-key')
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = DEBUG = os.environ.get('DEBUG', 'True') == 'True'
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = [ 'https://fiab-calc.onrender.com','127.0.0.1', 'localhost']
 
 
 # Application definition
